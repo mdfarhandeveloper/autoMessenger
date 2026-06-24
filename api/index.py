@@ -196,7 +196,7 @@ async def handle_messages(request: Request):
                     try:
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
                         response = ai_client.models.generate_content(
-                            model='gemini-1.5-flash',
+                            model='gemini-2.0-flash',
                             contents=ai_chat_prompt
                         )
                         send_fb_message(sender_id, response.text)
