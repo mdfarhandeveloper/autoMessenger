@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+requests
+firebase-admin
+google-generativeai
+Pillow
