@@ -1,12 +1,11 @@
 import os
 import json
 import requests
-from io import BytesIO
-from PIL import Image
 from fastapi import FastAPI, Request, Response
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google import genai  # নতুন গুগল জেন-আই প্যাকেজ
+from google import genai  
+from google.genai import types  # নতুন টাইপস ইম্পোর্ট করা হলো
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,7 +36,7 @@ else:
     except Exception as e:
         print(f"Firebase Client Fetch Error: {e}")
 
-# New Gemini AI Client Setup (2026 Standard)
+# Gemini AI Client
 gemini_key = os.environ.get("GEMINI_API_KEY")
 ai_client = None
 if gemini_key:
@@ -137,7 +136,7 @@ async def handle_messages(request: Request):
         for messaging_event in entry.get("messaging", []):
             sender_id = messaging_event["sender"]["id"]
             
-            # --- 📸 IMAGE HANDLE ---
+            # --- 📸 IMAGE HANDLE (BULLETPROOF BYTES VERSION) ---
             if "message" in messaging_event and "attachments" in messaging_event["message"]:
                 for attachment in messaging_event["message"]["attachments"]:
                     if attachment["type"] == "image":
@@ -150,26 +149,39 @@ async def handle_messages(request: Request):
                             continue
                         
                         try:
+                            # ফেসবুক থেকে ইমেজ ডাউনলোড করা
                             img_response = requests.get(image_url)
-                            img = Image.open(BytesIO(img_response.content))
                             
-                            prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
-                            
-                            # নতুন SDK অনুযায়ী কন্টেন্ট জেনারেট করা
-                            response = ai_client.models.generate_content(
-                                model='gemini-1.5-flash',
-                                contents=[prompt, img]
-                            )
-                            matched_id = response.text.strip()
-                            
-                            if matched_id and matched_id != "None" and db is not None:
-                                product_doc = db.collection('products').document(matched_id).get().to_dict()
-                                send_product_carousel(sender_id, [product_doc])
+                            if img_response.status_code == 200:
+                                # ইমেজকে সরাসরি Bytes এ রূপান্তর (Pillow ছাড়া)
+                                image_part = types.Part.from_bytes(
+                                    data=img_response.content,
+                                    mime_type="image/jpeg"
+                                )
+                                
+                                prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
+                                
+                                # জেমিনি মডেলে পাঠানো
+                                response = ai_client.models.generate_content(
+                                    model='gemini-1.5-flash',
+                                    contents=[prompt, image_part]
+                                )
+                                matched_id = response.text.strip()
+                                
+                                if matched_id and matched_id != "None" and db is not None:
+                                    product_doc = db.collection('products').document(matched_id).get().to_dict()
+                                    if product_doc:
+                                        send_product_carousel(sender_id, [product_doc])
+                                    else:
+                                        send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                                else:
+                                    send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
                             else:
-                                send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
+                                send_fb_message(sender_id, "Facebook theke chobi download korte somossa hochche।")
+                                
                         except Exception as e:
                             print(f"Gemini Vision Error: {e}")
-                            send_fb_message(sender_id, "Chobi processing error হয়েছে।")
+                            send_fb_message(sender_id, f"Chobi processing error হয়েছে।")
 
             # --- 💬 TEXT HANDLE ---
             elif "message" in messaging_event and "text" in messaging_event["message"]:
