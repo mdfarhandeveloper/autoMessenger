@@ -4,12 +4,12 @@ import requests
 from fastapi import FastAPI, Request, Response
 import firebase_admin
 from firebase_admin import credentials, firestore
-from openai import OpenAI
+from openai import OpenAI  # Groq সরাসরি OpenAI লাইব্রেরি সাপোর্ট করে
 from dotenv import load_dotenv
-app = FastAPI()
 
 load_dotenv()
 
+app = FastAPI()
 
 # ---- 🛠️ SAFE INITIALIZATION ----
 
@@ -35,16 +35,17 @@ else:
     except Exception as e:
         print(f"Firebase Client Fetch Error: {e}")
 
-# ---- 🤖 OPENAI (CHATGPT) CLIENT SETUUP ----
-openai_key = os.environ.get("OPENAI_API_KEY")
+# ---- 🤖 GROQ AI CLIENT SETUUP (USING OPENAI SDK) ----
+openai_key = os.environ.get("OPENAI_API_KEY") # এখানে আপনার Groq API Key-টি বসবে
 ai_client = None
 if openai_key:
+    # Groq-এর জন্য বেস ইউআরএল পরিবর্তন করা হয়েছে
     ai_client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
+        api_key=openai_key,
         base_url="https://api.groq.com/openai/v1"
     )
 else:
-    print("CRITICAL: OPENAI_API_KEY env variable is missing!")
+    print("CRITICAL: OPENAI_API_KEY (Groq Key) env variable is missing!")
 
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN")
@@ -110,7 +111,7 @@ def home():
     db_status = "Connected" if db is not None else "Disconnected"
     ai_status = "Ready" if ai_client is not None else "Missing Key"
     return {
-        "status": "E-commerce Bot is Live with ChatGPT!",
+        "status": "E-commerce Bot is Live with Free Groq API!",
         "database_status": db_status,
         "ai_status": ai_status
     }
@@ -138,7 +139,7 @@ async def handle_messages(request: Request):
         for messaging_event in entry.get("messaging", []):
             sender_id = messaging_event["sender"]["id"]
             
-            # --- 📸 IMAGE HANDLE (OPENAI GPT-4o-MINI VERSION) ---
+            # --- 📸 IMAGE HANDLE (GROQ VISION VERSION) ---
             if "message" in messaging_event and "attachments" in messaging_event["message"]:
                 for attachment in messaging_event["message"]["attachments"]:
                     if attachment["type"] == "image":
@@ -153,7 +154,7 @@ async def handle_messages(request: Request):
                         try:
                             prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
                             
-                            # OpenAI Vision API কল (সরাসরি ইমেজ URL পাস করা হচ্ছে)
+                            # Groq-এর ফ্রি ভিশন মডেল ব্যবহার করে ইমেজ এনালাইসিস
                             response = ai_client.chat.completions.create(
                                 model="llama-3.2-11b-vision-preview",
                                 messages=[
@@ -178,15 +179,15 @@ async def handle_messages(request: Request):
                                 if product_doc:
                                     send_product_carousel(sender_id, [product_doc])
                                 else:
-                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
                             else:
                                 send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
                                 
                         except Exception as e:
-                            print(f"ChatGPT Vision Error: {e}")
+                            print(f"Groq Vision Error: {e}")
                             send_fb_message(sender_id, f"Chobi processing error হয়েছে।")
 
-            # --- 💬 TEXT HANDLE (OPENAI VERSION) ---
+            # --- 💬 TEXT HANDLE (GROQ TEXT VERSION) ---
             elif "message" in messaging_event and "text" in messaging_event["message"]:
                 user_text = messaging_event["message"]["text"].lower()
                 if any(word in user_text for word in ["product", "onno", "details", "price"]):
@@ -199,6 +200,7 @@ async def handle_messages(request: Request):
                     try:
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
                         
+                        # Groq-এর ফ্রি টেক্সট মডেল (Llama 3.3) দিয়ে রেসপন্স তৈরি
                         response = ai_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[
@@ -208,7 +210,7 @@ async def handle_messages(request: Request):
                         
                         send_fb_message(sender_id, response.choices[0].message.content)
                     except Exception as e:
-                        print(f"ChatGPT Text Error: {e}")
+                        print(f"Groq Text Error: {e}")
                         send_fb_message(sender_id, "Apnake kivabe sahajjo korte pari? Product dekhte 'product' লিখুন।")
                             
     return {"status": "EVENT_RECEIVED"}
