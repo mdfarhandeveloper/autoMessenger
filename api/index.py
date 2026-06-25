@@ -63,10 +63,15 @@ def send_product_carousel(recipient_id, products):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
     elements = []
     for p in products:
+        # সাবটাইটেলে দাম স্পষ্ট করে দেখানোর জন্য ফরম্যাট সেট করা হয়েছে
+        price = p.get('price', 'N/A')
+        desc = p.get('description', '')
+        subtitle_text = f"Price: {price}\n{desc}"[:80] # ফেসবুক সাবটাইটেল লিমিট ৮০ ক্যারেক্টার
+        
         elements.append({
-            "title": p.get('name', 'E-commerce Product'),
+            "title": p.get('name', 'Jewelry Item'),
             "image_url": p.get('image_url', ''),
-            "subtitle": f"Price: {p.get('price', 'N/A')}\n{p.get('description', '')}",
+            "subtitle": subtitle_text,
             "buttons": [{"type": "web_url", "url": "https://yourwebsite.com/checkout", "title": "Buy Now"}]
         })
         
@@ -104,11 +109,9 @@ def get_all_products():
 
 # ---- 🖼️ IMAGE TO BASE64 HELPER FUNCTION ----
 def get_image_base64_from_url(url):
-    """ফেসবুকের ইউআরএল থেকে ইমেজ ডাউনলোড করে Base64 স্ট্রিংয়ে রূপান্তর করে"""
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            # কন্টেন্ট টাইপ চেক করা (যেমন: image/jpeg, image/png)
             content_type = response.headers.get('Content-Type', 'image/jpeg')
             encoded_string = base64.b64encode(response.content).decode('utf-8')
             return f"data:{content_type};base64,{encoded_string}"
@@ -121,7 +124,7 @@ def get_image_base64_from_url(url):
 def process_webhook_event(messaging_event):
     sender_id = messaging_event["sender"]["id"]
     
-    # --- 📸 IMAGE HANDLE (GROQ VISION WITH BASE64 FIX) ---
+    # --- 📸 IMAGE HANDLE (GROQ VISION) ---
     if "message" in messaging_event and "attachments" in messaging_event["message"]:
         for attachment in messaging_event["message"]["attachments"]:
             if attachment["type"] == "image":
@@ -133,7 +136,6 @@ def process_webhook_event(messaging_event):
                     send_fb_message(sender_id, "দুঃখিত, আমাদের ডাটাবেজ কানেকশন এখন অফলাইন।")
                     return
                 
-                # ফেসবুক ইউআরএল এর বদলে ইমেজ ডেটা Base64 এ কনভার্ট করা হচ্ছে
                 base64_image = get_image_base64_from_url(image_url)
                 if not base64_image:
                     send_fb_message(sender_id, "দুঃখিত, ছবিটি ডাউনলোড করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
@@ -155,10 +157,7 @@ def process_webhook_event(messaging_event):
                                 "role": "user",
                                 "content": [
                                     {"type": "text", "text": "What is the ID of this product from the database?"},
-                                    {
-                                        "type": "image_url", 
-                                        "image_url": {"url": base64_image} # এখানে Base64 ডেটা পাস করা হয়েছে
-                                    },
+                                    {"type": "image_url", "image_url": {"url": base64_image}},
                                 ],
                             }
                         ],
@@ -167,7 +166,6 @@ def process_webhook_event(messaging_event):
                     )
                     
                     matched_id = response.choices[0].message.content.strip()
-                    print(f"Groq Vision Matched ID: {matched_id}") # ডিবাগিং এর জন্য প্রিন্ট
                     
                     if matched_id and matched_id != "None" and db is not None:
                         product_doc = db.collection('products').document(matched_id).get().to_dict()
@@ -182,16 +180,33 @@ def process_webhook_event(messaging_event):
                     print(f"Groq Vision Error: {e}")
                     send_fb_message(sender_id, "ছবি প্রসেসিংয়ে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
 
-    # --- 💬 TEXT HANDLE (GROQ TEXT) ---
+    # --- 💬 TEXT HANDLE (GROQ TEXT + SEARCH FIX) ---
     elif "message" in messaging_event and "text" in messaging_event["message"]:
-        user_text = messaging_event["message"]["text"].lower()
+        user_text = messaging_event["message"]["text"].lower().strip()
         
-        if any(word in user_text for word in ["product", "onno", "details", "price", "পণ্য", "দাম"]):
-            products = get_all_products()
-            if products:
-                send_product_carousel(sender_id, products[:10])
+        all_products = get_all_products()
+        
+        # 🎯 ১. ইউজার নির্দিষ্ট কোনো জুয়েলারির নাম সরাসরি লিখেছে কিনা তা ডাটাবেজে মেলানো হচ্ছে
+        matched_products = []
+        for p in all_products:
+            p_name = p.get('name', '').lower()
+            # কাস্টমারের টেক্সট যদি প্রোডাক্টের নামের সাথে আংশিক বা পুরোপুরি মিলে যায়
+            if p_name and (p_name in user_text or user_text in p_name):
+                matched_products.append(p)
+        
+        # যদি ডাটাবেজের প্রোডাক্টের নামের সাথে ম্যাচ খুঁজে পায়, তবে দামসহ বাটন ও ছবি পাঠাবে
+        if matched_products:
+            send_product_carousel(sender_id, matched_products[:10])
+            return
+
+        # 🎯 ২. যদি ইউজার জেনারেল কোনো কিওয়ার্ড লেখে
+        if any(word in user_text for word in ["product", "onno", "details", "price", "all", "পণ্য", "দাম", "সব"]):
+            if all_products:
+                send_product_carousel(sender_id, all_products[:10])
             else:
                 send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
+                
+        # 🎯 ৩. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
         else:
             try:
                 system_instruction = (
@@ -199,7 +214,7 @@ def process_webhook_event(messaging_event):
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
                     "CRITICAL: If the customer asks how to buy or order (যেমন: কীভাবে অর্ডার করব, অর্ডার করার নিয়ম কী), "
                     "instruct them politely to visit our website, select their desired product, and complete the order from there. "
-                    "If they ask about products or pricing, tell them to type 'product'. "
+                    "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
                     "Keep your responses within 1-2 sentences."
                 )
                 
@@ -239,7 +254,7 @@ def verify_webhook(request: Request):
     challenge = params.get("hub.challenge")
 
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-        return Response(content=challenge, challenge, media_type="text/plain")
+        return Response(content=challenge, media_type="text/plain")
     return Response(content="Verification failed", status_code=403)
 
 
