@@ -6,10 +6,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from openai import OpenAI
 from dotenv import load_dotenv
+app = FastAPI()
 
 load_dotenv()
 
-app = FastAPI()
 
 # ---- 🛠️ SAFE INITIALIZATION ----
 
