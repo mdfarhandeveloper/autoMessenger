@@ -1,19 +1,18 @@
 import os
 import json
 import requests
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, BackgroundTasks
 import firebase_admin
 from firebase_admin import credentials, firestore
-from openai import OpenAI  # Groq সরাসরি OpenAI লাইব্রেরি সাপোর্ট করে
+from openai import OpenAI  
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Vercel এর জন্য এটি সবচেয়ে গুরুত্বপূর্ণ লাইন (টপ-লেভেলে থাকতে হবে)
+# Vercel এর জন্য এটি সবচেয়ে গুরুত্বপূর্ণ লাইন
 app = FastAPI() 
 
-# ---- 🛠️ SAFE INITIALIZATION ----
-
+# ---- 🛠️ SAFE FIREBASE INITIALIZATION ----
 db = None
 
 if not firebase_admin._apps:
@@ -36,11 +35,10 @@ else:
     except Exception as e:
         print(f"Firebase Client Fetch Error: {e}")
 
-# ---- 🤖 GROQ AI CLIENT SETUUP (USING OPENAI SDK) ----
+# ---- 🤖 GROQ AI CLIENT SETUP ----
 openai_key = os.environ.get("OPENAI_API_KEY") # এখানে আপনার Groq API Key-টি থাকবে
 ai_client = None
 if openai_key:
-    # Groq-এর জন্য বেস ইউআরএল সেটআপ
     ai_client = OpenAI(
         api_key=openai_key,
         base_url="https://api.groq.com/openai/v1"
@@ -105,6 +103,100 @@ def get_all_products():
         return []
 
 
+# ---- ⚡ BACKGROUND PROCESSING ENGINE ----
+# এটি ফেসবুকের রিকোয়েস্ট ডুপ্লিকেশন এবং মেসেজ লুপ হওয়া আটকাবে
+def process_webhook_event(messaging_event):
+    sender_id = messaging_event["sender"]["id"]
+    
+    # --- 📸 IMAGE HANDLE (GROQ VISION) ---
+    if "message" in messaging_event and "attachments" in messaging_event["message"]:
+        for attachment in messaging_event["message"]["attachments"]:
+            if attachment["type"] == "image":
+                image_url = attachment["payload"]["url"]
+                send_fb_message(sender_id, "আপনার দেওয়া ছবিটি স্ক্যান করা হচ্ছে, ektu opekkha korun...")
+                
+                all_products = get_all_products()
+                if not all_products:
+                    send_fb_message(sender_id, "Dukkhito, amader database connection ekhon offline.")
+                    return
+                
+                try:
+                    system_prompt = (
+                        "You are a strict database matcher. Compare the user's image with this product list: "
+                        f"{json.dumps(all_products)}. Identify if the image matches any product. "
+                        "CRITICAL: Your response must be EXACTLY the 'id' of the matched product, or the word 'None'. "
+                        "Do not include any greeting, punctuation, explanation, or markdown formatting."
+                    )
+                    
+                    response = ai_client.chat.completions.create(
+                        model="llama-3.2-11b-vision-instant",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "What is the ID of this product from the database?"},
+                                    {"type": "image_url", "image_url": {"url": image_url}},
+                                ],
+                            }
+                        ],
+                        max_tokens=10,
+                        temperature=0.0
+                    )
+                    
+                    matched_id = response.choices[0].message.content.strip()
+                    
+                    if matched_id and matched_id != "None" and db is not None:
+                        product_doc = db.collection('products').document(matched_id).get().to_dict()
+                        if product_doc:
+                            send_product_carousel(sender_id, [product_doc])
+                        else:
+                            send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                    else:
+                        send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
+                        
+                except Exception as e:
+                    print(f"Groq Vision Error: {e}")
+                    send_fb_message(sender_id, "Chobi processing error হয়েছে।")
+
+    # --- 💬 TEXT HANDLE (GROQ TEXT) ---
+    elif "message" in messaging_event and "text" in messaging_event["message"]:
+        user_text = messaging_event["message"]["text"].lower()
+        
+        # নির্দিষ্ট কিওয়ার্ড থাকলে সরাসরি ক্যারোসেল দেখাবে
+        if any(word in user_text for word in ["product", "onno", "details", "price", "পণ্য", "দাম"]):
+            products = get_all_products()
+            if products:
+                send_product_carousel(sender_id, products[:10])
+            else:
+                send_fb_message(sender_id, "Stock khali ba database offline।")
+        else:
+            try:
+                # 🎯 এখানে অর্ডার করার গাইডলাইন এবং বেঙ্গলি রেসপন্স ফিক্স করা হয়েছে
+                system_instruction = (
+                    "You are a polite and helpful E-commerce Assistant for an online shop. "
+                    "Always reply shortly and friendly in Bengali language (Bangla script). "
+                    "CRITICAL: If the customer asks how to buy or order (যেমন: কীভাবে অর্ডার করব, অর্ডার করার নিয়ম কী), "
+                    "instruct them politely to visit our website, select their desired product, and complete the order from there. "
+                    "If they ask about products or pricing, tell them to type 'product'. "
+                    "Keep your responses within 1-2 sentences."
+                )
+                
+                response = ai_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": user_text}
+                    ],
+                    max_tokens=150
+                )
+                
+                send_fb_message(sender_id, response.choices[0].message.content)
+            except Exception as e:
+                print(f"Groq Text Error: {e}")
+                send_fb_message(sender_id, "Apnake kivabe sahajjo korte pari? Product dekhte 'product' লিখুন।")
+
+
 # ---- 🌐 WEBHOOK ROUTING ----
 
 @app.get("/")
@@ -131,85 +223,14 @@ def verify_webhook(request: Request):
 
 
 @app.post("/webhook")
-async def handle_messages(request: Request):
+async def handle_messages(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     if body.get("object") != "page":
         return {"status": "not a page object"}
 
     for entry in body.get("entry", []):
         for messaging_event in entry.get("messaging", []):
-            sender_id = messaging_event["sender"]["id"]
-            
-            # --- 📸 IMAGE HANDLE (GROQ VISION) ---
-            if "message" in messaging_event and "attachments" in messaging_event["message"]:
-                for attachment in messaging_event["message"]["attachments"]:
-                    if attachment["type"] == "image":
-                        image_url = attachment["payload"]["url"]
-                        send_fb_message(sender_id, "Apnar deya chobiti scan kora hochche, ektu opekkha korun...")
-                        
-                        all_products = get_all_products()
-                        if not all_products:
-                            send_fb_message(sender_id, "Dukkhito, amader database connection ekhon offline.")
-                            continue
-                        
-                        try:
-                            prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
-                            
-                            response = ai_client.chat.completions.create(
-                                model="llama-3.2-11b-vision-instant",
-                                messages=[
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {"type": "text", "text": prompt},
-                                            {
-                                                "type": "image_url",
-                                                "image_url": {"url": image_url},
-                                            },
-                                        ],
-                                    }
-                                ],
-                                max_tokens=300,
-                            )
-                            
-                            matched_id = response.choices[0].message.content.strip()
-                            
-                            if matched_id and matched_id != "None" and db is not None:
-                                product_doc = db.collection('products').document(matched_id).get().to_dict()
-                                if product_doc:
-                                    send_product_carousel(sender_id, [product_doc])
-                                else:
-                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
-                            else:
-                                send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
+            # 🚀 রিকোয়েস্ট ব্যাকগ্রাউন্ড টাস্কে পাঠিয়ে দেওয়া হলো যাতে ৩ সেকেন্ডের ডেডলাইন মিস না হয়
+            background_tasks.add_task(process_webhook_event, messaging_event)
                                 
-                        except Exception as e:
-                            print(f"Groq Vision Error: {e}")
-                            send_fb_message(sender_id, f"Chobi processing error হয়েছে।")
-
-            # --- 💬 TEXT HANDLE (GROQ TEXT) ---
-            elif "message" in messaging_event and "text" in messaging_event["message"]:
-                user_text = messaging_event["message"]["text"].lower()
-                if any(word in user_text for word in ["product", "onno", "details", "price"]):
-                    products = get_all_products()
-                    if products:
-                        send_product_carousel(sender_id, products[:10])
-                    else:
-                        send_fb_message(sender_id, "Stock khali ba database offline।")
-                else:
-                    try:
-                        ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
-                        
-                        response = ai_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "user", "content": ai_chat_prompt}
-                            ]
-                        )
-                        
-                        send_fb_message(sender_id, response.choices[0].message.content)
-                    except Exception as e:
-                        print(f"Groq Text Error: {e}")
-                        send_fb_message(sender_id, "Apnake kivabe sahajjo korte pari? Product dekhte 'product' লিখুন।")
-                            
     return {"status": "EVENT_RECEIVED"}
