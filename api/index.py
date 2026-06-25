@@ -156,7 +156,7 @@ async def handle_messages(request: Request):
                             prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
                             
                             response = ai_client.chat.completions.create(
-                                model="llama-3.2-11b-vision-preview",
+                                model="llama-3.2-90b-vision-preview",
                                 messages=[
                                     {
                                         "role": "user",
