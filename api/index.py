@@ -2,6 +2,8 @@ import os
 import json
 import requests
 import base64
+from io import BytesIO
+from PIL import Image  # 🚀 ইমেজ কম্প্রেস করার জন্য যোগ করা হয়েছে
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -63,16 +65,20 @@ def send_product_carousel(recipient_id, products):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
     elements = []
     for p in products:
-        # সাবটাইটেলে দাম স্পষ্ট করে দেখানোর জন্য ফরম্যাট সেট করা হয়েছে
         price = p.get('price', 'N/A')
         desc = p.get('description', '')
-        subtitle_text = f"Price: {price}\n{desc}"[:80] # ফেসবুক সাবটাইটেল লিমিট ৮০ ক্যারেক্টার
+        subtitle_text = f"Price: {price}\n{desc}"[:80]
+        
+        # ডাইনামিক প্রোডাক্ট লিঙ্ক
+        product_link = p.get('product_url')
+        if not product_link:
+            product_link = f"https://yourwebsite.com/product/{p.get('id')}"
         
         elements.append({
             "title": p.get('name', 'Jewelry Item'),
             "image_url": p.get('image_url', ''),
             "subtitle": subtitle_text,
-            "buttons": [{"type": "web_url", "url": "https://veltor.sellbd.shop", "title": "Buy Now"}]
+            "buttons": [{"type": "web_url", "url": product_link, "title": "Buy Now"}]
         })
         
     payload = {
@@ -107,16 +113,31 @@ def get_all_products():
         print(f"Firestore Fetch Error: {e}")
         return []
 
-# ---- 🖼️ IMAGE TO BASE64 HELPER FUNCTION ----
+# ---- 🖼️ IMAGE COMPRESSION & BASE64 HELPER ----
 def get_image_base64_from_url(url):
+    """ফেসবুকের ইউআরএল থেকে ইমেজ ডাউনলোড করে, রিসাইজ ও কম্প্রেস করে Base64 এ রূপান্তর করে"""
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         if response.status_code == 200:
-            content_type = response.headers.get('Content-Type', 'image/jpeg')
-            encoded_string = base64.b64encode(response.content).decode('utf-8')
-            return f"data:{content_type};base64,{encoded_string}"
+            # ইমেজটি PIL দিয়ে ওপেন করা
+            img = Image.open(BytesIO(response.content))
+            
+            # RGB মোডে কনভার্ট করা (PNG বা অন্য ফরম্যাট থাকলে যেন সমস্যা না হয়)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            
+            # সর্বোচ্চ সাইজ ৮০০ পিক্সেল করা (যাতে গ্রক দ্রুত প্রসেস করতে পারে)
+            max_size = 800
+            img.thumbnail((max_size, max_size))
+            
+            # মেমোরিতে কম্প্রেসড ইমেজ সেভ করা
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=70) # কোয়ালিটি ৭০% করে সাইজ কমানো হলো
+            
+            encoded_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            return f"data:image/jpeg;base64,{encoded_string}"
     except Exception as e:
-        print(f"Error downloading or encoding image: {e}")
+        print(f"Error downloading or compressing image: {e}")
     return None
 
 
@@ -124,7 +145,7 @@ def get_image_base64_from_url(url):
 def process_webhook_event(messaging_event):
     sender_id = messaging_event["sender"]["id"]
     
-    # --- 📸 IMAGE HANDLE (GROQ VISION) ---
+    # --- 📸 IMAGE HANDLE ---
     if "message" in messaging_event and "attachments" in messaging_event["message"]:
         for attachment in messaging_event["message"]["attachments"]:
             if attachment["type"] == "image":
@@ -138,7 +159,7 @@ def process_webhook_event(messaging_event):
                 
                 base64_image = get_image_base64_from_url(image_url)
                 if not base64_image:
-                    send_fb_message(sender_id, "দুঃখিত, ছবিটি ডাউনলোড করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+                    send_fb_message(sender_id, "দুঃখিত, ছবিটি প্রসেস করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
                     return
                 
                 try:
@@ -166,6 +187,7 @@ def process_webhook_event(messaging_event):
                     )
                     
                     matched_id = response.choices[0].message.content.strip()
+                    print(f"Groq Vision Matched ID: {matched_id}")
                     
                     if matched_id and matched_id != "None" and db is not None:
                         product_doc = db.collection('products').document(matched_id).get().to_dict()
@@ -178,42 +200,34 @@ def process_webhook_event(messaging_event):
                         
                 except Exception as e:
                     print(f"Groq Vision Error: {e}")
-                    send_fb_message(sender_id, "ছবি প্রসেসিংয়ে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
+                    send_fb_message(sender_id, "ছবি প্রসেস করার সময় Groq API থেকে রেসপন্স পাওয়া যায়নি।")
 
-    # --- 💬 TEXT HANDLE (GROQ TEXT + SEARCH FIX) ---
+    # --- 💬 TEXT HANDLE ---
     elif "message" in messaging_event and "text" in messaging_event["message"]:
         user_text = messaging_event["message"]["text"].lower().strip()
         
         all_products = get_all_products()
-        
-        # 🎯 ১. ইউজার নির্দিষ্ট কোনো জুয়েলারির নাম সরাসরি লিখেছে কিনা তা ডাটাবেজে মেলানো হচ্ছে
         matched_products = []
         for p in all_products:
             p_name = p.get('name', '').lower()
-            # কাস্টমারের টেক্সট যদি প্রোডাক্টের নামের সাথে আংশিক বা পুরোপুরি মিলে যায়
             if p_name and (p_name in user_text or user_text in p_name):
                 matched_products.append(p)
         
-        # যদি ডাটাবেজের প্রোডাক্টের নামের সাথে ম্যাচ খুঁজে পায়, তবে দামসহ বাটন ও ছবি পাঠাবে
         if matched_products:
             send_product_carousel(sender_id, matched_products[:10])
             return
 
-        # 🎯 ২. যদি ইউজার জেনারেল কোনো কিওয়ার্ড লেখে
         if any(word in user_text for word in ["product", "onno", "details", "price", "all", "পণ্য", "দাম", "সব"]):
             if all_products:
                 send_product_carousel(sender_id, all_products[:10])
             else:
                 send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
-                
-        # 🎯 ৩. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
         else:
             try:
                 system_instruction = (
                     "You are a polite and helpful E-commerce Assistant for an online shop. "
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
-                    "CRITICAL: If the customer asks how to buy or order (যেমন: কীভাবে অর্ডার করব, অর্ডার করার নিয়ম কী), "
-                    "instruct them politely to visit our website, select their desired product, and complete the order from there. "
+                    "CRITICAL: If the customer asks how to buy or order, instruct them politely to visit our website, select their desired product, and complete the order from there. "
                     "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
                     "Keep your responses within 1-2 sentences."
                 )
