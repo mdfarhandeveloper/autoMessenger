@@ -52,7 +52,7 @@ FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN")
 
 # 🎯 ডাইনামিক ওয়েবসাইট লিংক ( .env ফাইল থেকে রিড করবে, না থাকলে ডিফোল্ট লিংক নেবে )
-WEBSITE_URL = os.environ.get("MY_WEBSITE_URL", "https://yourwebsite.com")
+WEBSITE_URL = os.environ.get("MY_WEBSITE_URL", "https://veltro.sellbd.shop")
 
 
 # ---- 📬 MESSENGER HELPER FUNCTIONS ----
@@ -73,9 +73,7 @@ def send_product_carousel(recipient_id, products):
         subtitle_text = f"Price: {price}\n{desc}"[:80]
         
         # ডাইনামিক প্রোডাক্ট লিংক জেনারেশন
-        product_link = p.get('product_url')
-        if not product_link:
-            product_link = f"{WEBSITE_URL}/product/{p.get('id')}"
+       
         
         elements.append({
             "title": p.get('name', 'Jewelry Item'),
