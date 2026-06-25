@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI()
+# Vercel এর জন্য এটি সবচেয়ে গুরুত্বপূর্ণ লাইন (টপ-লেভেলে থাকতে হবে)
+app = FastAPI() 
 
 # ---- 🛠️ SAFE INITIALIZATION ----
 
@@ -36,10 +37,10 @@ else:
         print(f"Firebase Client Fetch Error: {e}")
 
 # ---- 🤖 GROQ AI CLIENT SETUUP (USING OPENAI SDK) ----
-openai_key = os.environ.get("OPENAI_API_KEY") # এখানে আপনার Groq API Key-টি বসবে
+openai_key = os.environ.get("OPENAI_API_KEY") # এখানে আপনার Groq API Key-টি থাকবে
 ai_client = None
 if openai_key:
-    # Groq-এর জন্য বেস ইউআরএল পরিবর্তন করা হয়েছে
+    # Groq-এর জন্য বেস ইউআরএল সেটআপ
     ai_client = OpenAI(
         api_key=openai_key,
         base_url="https://api.groq.com/openai/v1"
@@ -139,7 +140,7 @@ async def handle_messages(request: Request):
         for messaging_event in entry.get("messaging", []):
             sender_id = messaging_event["sender"]["id"]
             
-            # --- 📸 IMAGE HANDLE (GROQ VISION VERSION) ---
+            # --- 📸 IMAGE HANDLE (GROQ VISION) ---
             if "message" in messaging_event and "attachments" in messaging_event["message"]:
                 for attachment in messaging_event["message"]["attachments"]:
                     if attachment["type"] == "image":
@@ -154,7 +155,6 @@ async def handle_messages(request: Request):
                         try:
                             prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
                             
-                            # Groq-এর ফ্রি ভিশন মডেল ব্যবহার করে ইমেজ এনালাইসিস
                             response = ai_client.chat.completions.create(
                                 model="llama-3.2-11b-vision-preview",
                                 messages=[
@@ -187,7 +187,7 @@ async def handle_messages(request: Request):
                             print(f"Groq Vision Error: {e}")
                             send_fb_message(sender_id, f"Chobi processing error হয়েছে।")
 
-            # --- 💬 TEXT HANDLE (GROQ TEXT VERSION) ---
+            # --- 💬 TEXT HANDLE (GROQ TEXT) ---
             elif "message" in messaging_event and "text" in messaging_event["message"]:
                 user_text = messaging_event["message"]["text"].lower()
                 if any(word in user_text for word in ["product", "onno", "details", "price"]):
@@ -200,7 +200,6 @@ async def handle_messages(request: Request):
                     try:
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
                         
-                        # Groq-এর ফ্রি টেক্সট মডেল (Llama 3.3) দিয়ে রেসপন্স তৈরি
                         response = ai_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[
