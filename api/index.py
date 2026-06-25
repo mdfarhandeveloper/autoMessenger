@@ -229,7 +229,7 @@ def process_webhook_event(messaging_event):
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
                     "CRITICAL: If the customer asks how to buy or order, instruct them politely to visit our website, select their desired product, and complete the order from there. "
                     "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
-                    "Keep your responses within 1-2 sentences."
+                    "Keep your responses within 1-2 sentences. if customer want to link or website link you send "https://veltor.sellbd.shop""
                 )
                 
                 response = ai_client.chat.completions.create(
