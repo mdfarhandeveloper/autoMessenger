@@ -4,4 +4,5 @@ requests
 firebase-admin
 google-genai
 Pillow
+openai
 python-dotenv
