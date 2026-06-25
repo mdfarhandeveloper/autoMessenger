@@ -204,10 +204,13 @@ def process_webhook_event(messaging_event):
                     send_fb_message(sender_id, "ছবি প্রসেস করার সময় Groq API থেকে রেসপন্স পাওয়া যায়নি।")
 
     # --- 💬 TEXT HANDLE ---
+    # --- 💬 TEXT HANDLE (GROQ TEXT + SEARCH + LINK FIX) ---
     elif "message" in messaging_event and "text" in messaging_event["message"]:
         user_text = messaging_event["message"]["text"].lower().strip()
         
         all_products = get_all_products()
+        
+        # 🎯 ১. ইউজার নির্দিষ্ট কোনো জুয়েলারির নাম সরাসরি লিখেছে কিনা
         matched_products = []
         for p in all_products:
             p_name = p.get('name', '').lower()
@@ -218,23 +221,55 @@ def process_webhook_event(messaging_event):
             send_product_carousel(sender_id, matched_products[:10])
             return
 
+        # 🎯 ২. ইউজার যদি সরাসরি ওয়েবসাইটের লিঙ্ক চায়
+        if any(word in user_text for word in ["link", "website", "লিঙ্ক", "লিংক", "ওয়েবসাইট", "ওয়েব সাইট"]):
+            # অপশন এ: বাটন আকারে সুন্দর করে লিঙ্ক পাঠানো (প্রফেশনাল)
+            url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
+            payload = {
+                "recipient": {"id": sender_id},
+                "message": {
+                    "attachment": {
+                        "type": "template",
+                        "payload": {
+                            "template_type": "button",
+                            "text": "নিচের বাটনে ক্লিক করে আমাদের ওয়েবসাইট ভিজিট করুন এবং আপনার পছন্দের পণ্যটি অর্ডার করুন:",
+                            "buttons": [
+                                {
+                                    "type": "web_url",
+                                    "url": "https://veltro.sellbd.shop",  # 🚀 এখানে আপনার আসল ওয়েবসাইটের লিঙ্ক দিন
+                                    "title": "Visit Website"
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+            headers = {"Content-Type": "application/json"}
+            requests.post(url, json=payload, headers=headers)
+            return
+
+        # 🎯 ৩. যদি ইউজার জেনারেল কোনো কিওয়ার্ড লেখে (প্রোডাক্ট/দাম)
         if any(word in user_text for word in ["product", "onno", "details", "price", "all", "পণ্য", "দাম", "সব"]):
             if all_products:
                 send_product_carousel(sender_id, all_products[:10])
             else:
                 send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
+                
+        # 🎯 ৪. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
         else:
             try:
+                # প্রম্পটে এআই-কে লিঙ্ক চাওয়ার বিষয়টি জানিয়ে দেওয়া হয়েছে, যাতে সে টেক্সটেও গাইড করতে পারে
                 system_instruction = (
                     "You are a polite and helpful E-commerce Assistant for an online shop. "
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
                     "CRITICAL: If the customer asks how to buy or order, instruct them politely to visit our website, select their desired product, and complete the order from there. "
+                    "If they ask for the website link, tell them to click the link button provided or visit 'https://yourwebsite.com'. "  # 🚀 আপনার লিঙ্ক বসান
                     "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
-                    "Keep your responses within 1-2 sentences. if customer want to link or website link you send "https://veltor.sellbd.shop""
+                    "Keep your responses within 1-2 sentences."
                 )
                 
                 response = ai_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="meta-llama/llama-4-scout-17b-16e-instruct", # আপনার নতুন ভিশন/টেক্সট মডেল
                     messages=[
                         {"role": "system", "content": system_instruction},
                         {"role": "user", "content": user_text}
@@ -246,7 +281,6 @@ def process_webhook_event(messaging_event):
             except Exception as e:
                 print(f"Groq Text Error: {e}")
                 send_fb_message(sender_id, "আপনাকে কীভাবে সাহায্য করতে পারি? প্রোডাক্ট দেখতে 'product' লিখুন।")
-
 
 # ---- 🌐 WEBHOOK ROUTING ----
 
