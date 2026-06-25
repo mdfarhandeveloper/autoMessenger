@@ -72,7 +72,7 @@ def send_product_carousel(recipient_id, products):
             "title": p.get('name', 'Jewelry Item'),
             "image_url": p.get('image_url', ''),
             "subtitle": subtitle_text,
-            "buttons": [{"type": "web_url", "url": "https://yourwebsite.com/checkout", "title": "Buy Now"}]
+            "buttons": [{"type": "web_url", "url": "https://veltor.sellbd.shop", "title": "Buy Now"}]
         })
         
     payload = {
