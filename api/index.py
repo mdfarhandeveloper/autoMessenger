@@ -51,8 +51,8 @@ else:
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN")
 
-# 🎯 ডাইনামিক ওয়েবসাইট লিংক ( .env ফাইল থেকে রিড করবে, না থাকলে ডিফোল্ট লিংক নেবে )
-WEBSITE_URL = os.environ.get("MY_WEBSITE_URL", "https://veltro.sellbd.shop")
+# 🎯 ডাইনামিক ওয়েবসাইট লিংক (.env ফাইল থেকে রিড করবে, না থাকলে ডিফোল্ট লিংক নেবে)
+WEBSITE_URL = os.environ.get("MY_WEBSITE_URL", "https://veltro.sellbd.shop").strip()
 
 
 # ---- 📬 MESSENGER HELPER FUNCTIONS ----
@@ -67,21 +67,33 @@ def send_fb_message(recipient_id, text):
 def send_product_carousel(recipient_id, products):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
     elements = []
+    
     for p in products:
         price = p.get('price', 'N/A')
         desc = p.get('description', '')
+        
+        # সাবটাইটেল টেক্সট ৮০ ক্যারেক্টারের বেশি হলে ফেসবুক মেসেজ রিজেক্ট করে দেয়, তাই কাটা হলো
         subtitle_text = f"Price: {price}\n{desc}"[:80]
         
-        # ডাইনামিক প্রোডাক্ট লিংক জেনারেশন
-       product_link = p.get('product_url')
-        if not product_link:
-            product_link = f"{WEBSITE_URL}"
+        # 🎯 ফিক্স: গুগল শিট বা অন্য কোথাও লিঙ্ক খোঁজার দরকার নেই, সরাসরি আপনার মেইন সাইটের লিঙ্ক বসবে
+        product_link = WEBSITE_URL 
+        
+        # ইমেজের ইউআরএল যদি ফাঁকা থাকে, তবে ফেসবুক ক্যারোসেল দেখাবে না। তাই ব্যাকআপ ইমেজ সেট করা হলো
+        image_url = p.get('image_url', '').strip()
+        if not image_url or not image_url.startswith("http"):
+            image_url = "https://placehold.co/600x400?text=No+Image" # ব্যাকআপ ইমেজ ইউআরএল
         
         elements.append({
-            "title": p.get('name', 'Jewelry Item'),
-            "image_url": p.get('image_url', ''),
+            "title": p.get('name', 'Jewelry Item')[:80], # টাইটেলও সর্বোচ্চ ৮০ ক্যারেক্টার
+            "image_url": image_url,
             "subtitle": subtitle_text,
-            "buttons": [{"type": "web_url", "url": product_link, "title": "Buy Now"}]
+            "buttons": [
+                {
+                    "type": "web_url", 
+                    "url": product_link, # 🚀 এখানে সরাসরি আপনার মেইন ওয়েবসাইট ওপেন হবে
+                    "title": "Buy Now"
+                }
+            ]
         })
         
     payload = {
@@ -91,13 +103,16 @@ def send_product_carousel(recipient_id, products):
                 "type": "template",
                 "payload": {
                     "template_type": "generic",
-                    "elements": elements[:10]
+                    "elements": elements[:10] # সর্বোচ্চ ১০টি প্রোডাক্ট দেখাবে একসাথে
                 }
             }
         }
     }
     headers = {"Content-Type": "application/json"}
-    requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers)
+    
+    # এটি সার্ভার লগে প্রিন্ট করবে যে ফেসবুক মেসেজটি রিসিভ করেছে নাকি রিজেক্ট করেছে (ডিবাগিংয়ের জন্য)
+    print(f"Facebook Carousel Send Status: {response.status_code}, Response: {response.text}")
 
 
 def get_all_products():
@@ -145,7 +160,7 @@ def process_webhook_event(messaging_event):
         for attachment in messaging_event["message"]["attachments"]:
             if attachment["type"] == "image":
                 image_url = attachment["payload"]["url"]
-                send_fb_message(sender_id, "আপনার দেওয়া ছবিটি স্ক্যান করা হচ্ছে, একটু অপেক্ষা করুন...")
+                send_fb_message(sender_id, "আপনার দেওয়া ছবিটি স্ক্যান করা হচ্ছে, একটু অপেক্ষা করুন...")
                 
                 all_products = get_all_products()
                 if not all_products:
@@ -154,7 +169,7 @@ def process_webhook_event(messaging_event):
                 
                 base64_image = get_image_base64_from_url(image_url)
                 if not base64_image:
-                    send_fb_message(sender_id, "দুঃখিত, ছবিটি প্রসেস করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+                    send_fb_message(sender_id, "দুঃখিত, ছবিটি প্রসেস করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
                     return
                 
                 try:
@@ -187,11 +202,12 @@ def process_webhook_event(messaging_event):
                     if matched_id and matched_id != "None" and db is not None:
                         product_doc = db.collection('products').document(matched_id).get().to_dict()
                         if product_doc:
+                            product_doc['id'] = matched_id
                             send_product_carousel(sender_id, [product_doc])
                         else:
-                            send_fb_message(sender_id, "প্রোডাক্ট আইডি মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                            send_fb_message(sender_id, "প্রোডাক্ট আইডি মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
                     else:
-                        send_fb_message(sender_id, "দুঃখিত! এই প্রোডাক্টটি আমাদের ডাটাবেজে খুঁজে পাওয়া যায়নি।")
+                        send_fb_message(sender_id, "দুঃখিত! এই প্রোডাক্টটি আমাদের ডাটাবেজে খুঁজে পাওয়া যায়নি।")
                         
                 except Exception as e:
                     print(f"Groq Vision Actual API Error: {e}")
@@ -212,7 +228,7 @@ def process_webhook_event(messaging_event):
             send_product_carousel(sender_id, matched_products[:10])
             return
 
-        # 🎯 ১. ইউজার যদি সরাসরি ওয়েবসাইটের লিংক চায় (এখন ডাইনামিক)
+        # 🎯 ১. ইউজার যদি সরাসরি ওয়েবসাইটের লিংক চায়
         if any(word in user_text for word in ["link", "website", "লিঙ্ক", "লিংক", "ওয়েবসাইট", "ওয়েব সাইট"]):
             url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
             payload = {
@@ -222,11 +238,11 @@ def process_webhook_event(messaging_event):
                         "type": "template",
                         "payload": {
                             "template_type": "button",
-                            "text": "নিচের বাটনে ক্লিক করে আমাদের ওয়েবসাইট ভিজিট করুন এবং আপনার পছন্দের পণ্যটি অর্ডার করুন:",
+                            "text": "নিচের বাটনে ক্লিক করে আমাদের ওয়েবসাইট ভিজিট করুন এবং আপনার পছন্দের পণ্যটি অর্ডার করুন:",
                             "buttons": [
                                 {
                                     "type": "web_url",
-                                    "url": WEBSITE_URL,  # 🚀 .env এর লিংক এখানে বসে যাবে
+                                    "url": WEBSITE_URL,  
                                     "title": "Visit Website"
                                 }
                             ]
@@ -234,25 +250,24 @@ def process_webhook_event(messaging_event):
                     }
                 }
             }
-            headers = {"Content-Type": "application/json"}
-            requests.post(url, json=payload, headers=headers)
+            requests.post(url, json=payload)
             return
 
-        # 🎯 ২. ইউজার যদি প্রোডাক্ট দেখতে চায়
+        # 🎯 ২. ইউজার যদি প্রোডাক্ট দেখতে চায়
         if any(word in user_text for word in ["product", "onno", "details", "price", "all", "পণ্য", "দাম", "সব"]):
             if all_products:
                 send_product_carousel(sender_id, all_products[:10])
             else:
                 send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
                 
-        # 🎯 ৩. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
+        # 🎯 ৩. কোনো ম্যাচ না থাকলে এআই চ্যাট করবে
         else:
             try:
                 system_instruction = (
                     "You are a polite and helpful E-commerce Assistant for an online shop. "
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
                     "CRITICAL: If the customer asks how to buy or order, instruct them politely to visit our website, select their desired product, and complete the order from there. "
-                    f"If they ask for the website link, tell them to click the link button provided or visit '{WEBSITE_URL}'. "  # 🚀 এআই প্রম্পটেও অটোমেটিক লিংক বসে যাবে
+                    f"If they ask for the website link, tell them to click the link button provided or visit '{WEBSITE_URL}'. " 
                     "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
                     "Keep your responses within 1-2 sentences."
                 )
@@ -306,5 +321,5 @@ async def handle_messages(request: Request, background_tasks: BackgroundTasks):
     for entry in body.get("entry", []):
         for messaging_event in entry.get("messaging", []):
             background_tasks.add_task(process_webhook_event, messaging_event)
-                                
+                                    
     return {"status": "EVENT_RECEIVED"}
