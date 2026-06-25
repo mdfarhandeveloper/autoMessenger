@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import base64
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -9,7 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Vercel এর জন্য এটি সবচেয়ে গুরুত্বপূর্ণ লাইন
 app = FastAPI() 
 
 # ---- 🛠️ SAFE FIREBASE INITIALIZATION ----
@@ -36,7 +36,7 @@ else:
         print(f"Firebase Client Fetch Error: {e}")
 
 # ---- 🤖 GROQ AI CLIENT SETUP ----
-openai_key = os.environ.get("OPENAI_API_KEY") # এখানে আপনার Groq API Key-টি থাকবে
+openai_key = os.environ.get("OPENAI_API_KEY") 
 ai_client = None
 if openai_key:
     ai_client = OpenAI(
@@ -102,22 +102,41 @@ def get_all_products():
         print(f"Firestore Fetch Error: {e}")
         return []
 
+# ---- 🖼️ IMAGE TO BASE64 HELPER FUNCTION ----
+def get_image_base64_from_url(url):
+    """ফেসবুকের ইউআরএল থেকে ইমেজ ডাউনলোড করে Base64 স্ট্রিংয়ে রূপান্তর করে"""
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            # কন্টেন্ট টাইপ চেক করা (যেমন: image/jpeg, image/png)
+            content_type = response.headers.get('Content-Type', 'image/jpeg')
+            encoded_string = base64.b64encode(response.content).decode('utf-8')
+            return f"data:{content_type};base64,{encoded_string}"
+    except Exception as e:
+        print(f"Error downloading or encoding image: {e}")
+    return None
+
 
 # ---- ⚡ BACKGROUND PROCESSING ENGINE ----
-# এটি ফেসবুকের রিকোয়েস্ট ডুপ্লিকেশন এবং মেসেজ লুপ হওয়া আটকাবে
 def process_webhook_event(messaging_event):
     sender_id = messaging_event["sender"]["id"]
     
-    # --- 📸 IMAGE HANDLE (GROQ VISION) ---
+    # --- 📸 IMAGE HANDLE (GROQ VISION WITH BASE64 FIX) ---
     if "message" in messaging_event and "attachments" in messaging_event["message"]:
         for attachment in messaging_event["message"]["attachments"]:
             if attachment["type"] == "image":
                 image_url = attachment["payload"]["url"]
-                send_fb_message(sender_id, "আপনার দেওয়া ছবিটি স্ক্যান করা হচ্ছে, ektu opekkha korun...")
+                send_fb_message(sender_id, "আপনার দেওয়া ছবিটি স্ক্যান করা হচ্ছে, একটু অপেক্ষা করুন...")
                 
                 all_products = get_all_products()
                 if not all_products:
-                    send_fb_message(sender_id, "Dukkhito, amader database connection ekhon offline.")
+                    send_fb_message(sender_id, "দুঃখিত, আমাদের ডাটাবেজ কানেকশন এখন অফলাইন।")
+                    return
+                
+                # ফেসবুক ইউআরএল এর বদলে ইমেজ ডেটা Base64 এ কনভার্ট করা হচ্ছে
+                base64_image = get_image_base64_from_url(image_url)
+                if not base64_image:
+                    send_fb_message(sender_id, "দুঃখিত, ছবিটি ডাউনলোড করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
                     return
                 
                 try:
@@ -136,7 +155,10 @@ def process_webhook_event(messaging_event):
                                 "role": "user",
                                 "content": [
                                     {"type": "text", "text": "What is the ID of this product from the database?"},
-                                    {"type": "image_url", "image_url": {"url": image_url}},
+                                    {
+                                        "type": "image_url", 
+                                        "image_url": {"url": base64_image} # এখানে Base64 ডেটা পাস করা হয়েছে
+                                    },
                                 ],
                             }
                         ],
@@ -145,34 +167,33 @@ def process_webhook_event(messaging_event):
                     )
                     
                     matched_id = response.choices[0].message.content.strip()
+                    print(f"Groq Vision Matched ID: {matched_id}") # ডিবাগিং এর জন্য প্রিন্ট
                     
                     if matched_id and matched_id != "None" and db is not None:
                         product_doc = db.collection('products').document(matched_id).get().to_dict()
                         if product_doc:
                             send_product_carousel(sender_id, [product_doc])
                         else:
-                            send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                            send_fb_message(sender_id, "প্রোডাক্ট আইডি মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
                     else:
-                        send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
+                        send_fb_message(sender_id, "দুঃখিত! এই প্রোডাক্টটি আমাদের ডাটাবেজে খুঁজে পাওয়া যায়নি।")
                         
                 except Exception as e:
                     print(f"Groq Vision Error: {e}")
-                    send_fb_message(sender_id, "Chobi processing error হয়েছে।")
+                    send_fb_message(sender_id, "ছবি প্রসেসিংয়ে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
 
     # --- 💬 TEXT HANDLE (GROQ TEXT) ---
     elif "message" in messaging_event and "text" in messaging_event["message"]:
         user_text = messaging_event["message"]["text"].lower()
         
-        # নির্দিষ্ট কিওয়ার্ড থাকলে সরাসরি ক্যারোসেল দেখাবে
         if any(word in user_text for word in ["product", "onno", "details", "price", "পণ্য", "দাম"]):
             products = get_all_products()
             if products:
                 send_product_carousel(sender_id, products[:10])
             else:
-                send_fb_message(sender_id, "Stock khali ba database offline।")
+                send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
         else:
             try:
-                # 🎯 এখানে অর্ডার করার গাইডলাইন এবং বেঙ্গলি রেসপন্স ফিক্স করা হয়েছে
                 system_instruction = (
                     "You are a polite and helpful E-commerce Assistant for an online shop. "
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
@@ -194,7 +215,7 @@ def process_webhook_event(messaging_event):
                 send_fb_message(sender_id, response.choices[0].message.content)
             except Exception as e:
                 print(f"Groq Text Error: {e}")
-                send_fb_message(sender_id, "Apnake kivabe sahajjo korte pari? Product dekhte 'product' লিখুন।")
+                send_fb_message(sender_id, "আপনাকে কীভাবে সাহায্য করতে পারি? প্রোডাক্ট দেখতে 'product' লিখুন।")
 
 
 # ---- 🌐 WEBHOOK ROUTING ----
@@ -218,7 +239,7 @@ def verify_webhook(request: Request):
     challenge = params.get("hub.challenge")
 
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-        return Response(content=challenge, media_type="text/plain")
+        return Response(content=challenge, challenge, media_type="text/plain")
     return Response(content="Verification failed", status_code=403)
 
 
@@ -230,7 +251,6 @@ async def handle_messages(request: Request, background_tasks: BackgroundTasks):
 
     for entry in body.get("entry", []):
         for messaging_event in entry.get("messaging", []):
-            # 🚀 রিকোয়েস্ট ব্যাকগ্রাউন্ড টাস্কে পাঠিয়ে দেওয়া হলো যাতে ৩ সেকেন্ডের ডেডলাইন মিস না হয়
             background_tasks.add_task(process_webhook_event, messaging_event)
                                 
     return {"status": "EVENT_RECEIVED"}
