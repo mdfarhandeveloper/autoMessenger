@@ -39,7 +39,11 @@ else:
 openai_key = os.environ.get("OPENAI_API_KEY")
 ai_client = None
 if openai_key:
-    ai_client = OpenAI(api_key=openai_key)
+    # আগের ai_client = OpenAI(api_key=openai_key) এর জায়গায় এটি দিন:
+ai_client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"), # এখানে Groq থেকে পাওয়া ফ্রি কী-টি থাকবে
+    base_url="https://api.groq.com/openai/v1"  # <--- এই লাইনটি যোগ করুন
+)
 else:
     print("CRITICAL: OPENAI_API_KEY env variable is missing!")
 
@@ -152,7 +156,7 @@ async def handle_messages(request: Request):
                             
                             # OpenAI Vision API কল (সরাসরি ইমেজ URL পাস করা হচ্ছে)
                             response = ai_client.chat.completions.create(
-                                model="gpt-4o",
+                                model="llama-3.2-11b-vision-preview",
                                 messages=[
                                     {
                                         "role": "user",
@@ -197,7 +201,7 @@ async def handle_messages(request: Request):
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
                         
                         response = ai_client.chat.completions.create(
-                            model="gpt-4o",
+                            model="llama-3.3-70b-versatile",
                             messages=[
                                 {"role": "user", "content": ai_chat_prompt}
                             ]
