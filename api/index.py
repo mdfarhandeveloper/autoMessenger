@@ -4,8 +4,7 @@ import requests
 from fastapi import FastAPI, Request, Response
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google import genai  
-from google.genai import types  # নতুন টাইপস ইম্পোর্ট করা হলো
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,13 +35,13 @@ else:
     except Exception as e:
         print(f"Firebase Client Fetch Error: {e}")
 
-# Gemini AI Client
-gemini_key = os.environ.get("GEMINI_API_KEY")
+# ---- 🤖 OPENAI (CHATGPT) CLIENT SETUUP ----
+openai_key = os.environ.get("OPENAI_API_KEY")
 ai_client = None
-if gemini_key:
-    ai_client = genai.Client(api_key=gemini_key)
+if openai_key:
+    ai_client = OpenAI(api_key=openai_key)
 else:
-    print("CRITICAL: GEMINI_API_KEY env variable is missing!")
+    print("CRITICAL: OPENAI_API_KEY env variable is missing!")
 
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN")
@@ -108,7 +107,7 @@ def home():
     db_status = "Connected" if db is not None else "Disconnected"
     ai_status = "Ready" if ai_client is not None else "Missing Key"
     return {
-        "status": "E-commerce Bot is Live!",
+        "status": "E-commerce Bot is Live with ChatGPT!",
         "database_status": db_status,
         "ai_status": ai_status
     }
@@ -136,7 +135,7 @@ async def handle_messages(request: Request):
         for messaging_event in entry.get("messaging", []):
             sender_id = messaging_event["sender"]["id"]
             
-            # --- 📸 IMAGE HANDLE (BULLETPROOF BYTES VERSION) ---
+            # --- 📸 IMAGE HANDLE (OPENAI GPT-4o-MINI VERSION) ---
             if "message" in messaging_event and "attachments" in messaging_event["message"]:
                 for attachment in messaging_event["message"]["attachments"]:
                     if attachment["type"] == "image":
@@ -149,41 +148,42 @@ async def handle_messages(request: Request):
                             continue
                         
                         try:
-                            # ফেসবুক থেকে ইমেজ ডাউনলোড করা
-                            img_response = requests.get(image_url)
+                            prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
                             
-                            if img_response.status_code == 200:
-                                # ইমেজকে সরাসরি Bytes এ রূপান্তর (Pillow ছাড়া)
-                                image_part = types.Part.from_bytes(
-                                    data=img_response.content,
-                                    mime_type="image/jpeg"
-                                )
-                                
-                                prompt = f"Compare image with database: {json.dumps(all_products)}. Return ONLY product id or 'None'."
-                                
-                                # জেমিনি মডেলে পাঠানো
-                                response = ai_client.models.generate_content(
-                                    model='gemini-2.0-flash',
-                                    contents=[prompt, image_part]
-                                )
-                                matched_id = response.text.strip()
-                                
-                                if matched_id and matched_id != "None" and db is not None:
-                                    product_doc = db.collection('products').document(matched_id).get().to_dict()
-                                    if product_doc:
-                                        send_product_carousel(sender_id, [product_doc])
-                                    else:
-                                        send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                            # OpenAI Vision API কল (সরাসরি ইমেজ URL পাস করা হচ্ছে)
+                            response = ai_client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "text", "text": prompt},
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {"url": image_url},
+                                            },
+                                        ],
+                                    }
+                                ],
+                                max_tokens=300,
+                            )
+                            
+                            matched_id = response.choices[0].message.content.strip()
+                            
+                            if matched_id and matched_id != "None" and db is not None:
+                                product_doc = db.collection('products').document(matched_id).get().to_dict()
+                                if product_doc:
+                                    send_product_carousel(sender_id, [product_doc])
                                 else:
-                                    send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
+                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
                             else:
-                                send_fb_message(sender_id, "Facebook theke chobi download korte somossa hochche।")
+                                send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
                                 
                         except Exception as e:
-                            print(f"Gemini Vision Error: {e}")
+                            print(f"ChatGPT Vision Error: {e}")
                             send_fb_message(sender_id, f"Chobi processing error হয়েছে।")
 
-            # --- 💬 TEXT HANDLE ---
+            # --- 💬 TEXT HANDLE (OPENAI VERSION) ---
             elif "message" in messaging_event and "text" in messaging_event["message"]:
                 user_text = messaging_event["message"]["text"].lower()
                 if any(word in user_text for word in ["product", "onno", "details", "price"]):
@@ -195,13 +195,17 @@ async def handle_messages(request: Request):
                 else:
                     try:
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
-                        response = ai_client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=ai_chat_prompt
+                        
+                        response = ai_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[
+                                {"role": "user", "content": ai_chat_prompt}
+                            ]
                         )
-                        send_fb_message(sender_id, response.text)
+                        
+                        send_fb_message(sender_id, response.choices[0].message.content)
                     except Exception as e:
-                        print(f"Gemini Text Error: {e}")
+                        print(f"ChatGPT Text Error: {e}")
                         send_fb_message(sender_id, "Apnake kivabe sahajjo korte pari? Product dekhte 'product' লিখুন।")
                             
     return {"status": "EVENT_RECEIVED"}
