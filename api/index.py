@@ -3,7 +3,7 @@ import json
 import requests
 import base64
 from io import BytesIO
-from PIL import Image  # 🚀 ইমেজ কম্প্রেস করার জন্য যোগ করা হয়েছে
+from PIL import Image
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -51,6 +51,9 @@ else:
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN")
 
+# 🎯 ডাইনামিক ওয়েবসাইট লিংক ( .env ফাইল থেকে রিড করবে, না থাকলে ডিফোল্ট লিংক নেবে )
+WEBSITE_URL = os.environ.get("MY_WEBSITE_URL", "https://yourwebsite.com")
+
 
 # ---- 📬 MESSENGER HELPER FUNCTIONS ----
 
@@ -69,10 +72,10 @@ def send_product_carousel(recipient_id, products):
         desc = p.get('description', '')
         subtitle_text = f"Price: {price}\n{desc}"[:80]
         
-        # ডাইনামিক প্রোডাক্ট লিঙ্ক
+        # ডাইনামিক প্রোডাক্ট লিংক জেনারেশন
         product_link = p.get('product_url')
         if not product_link:
-            product_link = f"https://veltro.sellbd.shop"
+            product_link = f"{WEBSITE_URL}/product/{p.get('id')}"
         
         elements.append({
             "title": p.get('name', 'Jewelry Item'),
@@ -113,27 +116,19 @@ def get_all_products():
         print(f"Firestore Fetch Error: {e}")
         return []
 
-# ---- 🖼️ IMAGE COMPRESSION & BASE64 HELPER ----
+
 def get_image_base64_from_url(url):
-    """ফেসবুকের ইউআরএল থেকে ইমেজ ডাউনলোড করে, রিসাইজ ও কম্প্রেস করে Base64 এ রূপান্তর করে"""
     try:
         response = requests.get(url, timeout=15)
         if response.status_code == 200:
-            # ইমেজটি PIL দিয়ে ওপেন করা
             img = Image.open(BytesIO(response.content))
-            
-            # RGB মোডে কনভার্ট করা (PNG বা অন্য ফরম্যাট থাকলে যেন সমস্যা না হয়)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             
-            # সর্বোচ্চ সাইজ ৮০০ পিক্সেল করা (যাতে গ্রক দ্রুত প্রসেস করতে পারে)
-            max_size = 800
+            max_size = 600
             img.thumbnail((max_size, max_size))
-            
-            # মেমোরিতে কম্প্রেসড ইমেজ সেভ করা
             buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=70) # কোয়ালিটি ৭০% করে সাইজ কমানো হলো
-            
+            img.save(buffer, format="JPEG", quality=65) 
             encoded_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
             return f"data:image/jpeg;base64,{encoded_string}"
     except Exception as e:
@@ -168,11 +163,10 @@ def process_webhook_event(messaging_event):
                         f"{json.dumps(all_products)}. Identify if the image matches any product. "
                         "CRITICAL: Your response must be EXACTLY the 'id' of the matched product, or the word 'None'. "
                         "Do not include any greeting, punctuation, explanation, or markdown formatting."
-                        "if anyone want to link or website link you send this costomer 'https//veltro.sellbd.shop'"
                     )
                     
                     response = ai_client.chat.completions.create(
-                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                        model="meta-llama/llama-4-scout-17b-16e-instruct", 
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {
@@ -200,17 +194,14 @@ def process_webhook_event(messaging_event):
                         send_fb_message(sender_id, "দুঃখিত! এই প্রোডাক্টটি আমাদের ডাটাবেজে খুঁজে পাওয়া যায়নি।")
                         
                 except Exception as e:
-                    print(f"Groq Vision Error: {e}")
-                    send_fb_message(sender_id, "ছবি প্রসেস করার সময় Groq API থেকে রেসপন্স পাওয়া যায়নি।")
+                    print(f"Groq Vision Actual API Error: {e}")
+                    send_fb_message(sender_id, "দুঃখিত, এই মুহূর্তে ইমেজ এপিআই রেসপন্স করছে না। অনুগ্রহ করে পণ্যের নাম লিখে সার্চ করুন।")
 
     # --- 💬 TEXT HANDLE ---
-    # --- 💬 TEXT HANDLE (GROQ TEXT + SEARCH + LINK FIX) ---
     elif "message" in messaging_event and "text" in messaging_event["message"]:
         user_text = messaging_event["message"]["text"].lower().strip()
         
         all_products = get_all_products()
-        
-        # 🎯 ১. ইউজার নির্দিষ্ট কোনো জুয়েলারির নাম সরাসরি লিখেছে কিনা
         matched_products = []
         for p in all_products:
             p_name = p.get('name', '').lower()
@@ -221,9 +212,8 @@ def process_webhook_event(messaging_event):
             send_product_carousel(sender_id, matched_products[:10])
             return
 
-        # 🎯 ২. ইউজার যদি সরাসরি ওয়েবসাইটের লিঙ্ক চায়
+        # 🎯 ১. ইউজার যদি সরাসরি ওয়েবসাইটের লিংক চায় (এখন ডাইনামিক)
         if any(word in user_text for word in ["link", "website", "লিঙ্ক", "লিংক", "ওয়েবসাইট", "ওয়েব সাইট"]):
-            # অপশন এ: বাটন আকারে সুন্দর করে লিঙ্ক পাঠানো (প্রফেশনাল)
             url = f"https://graph.facebook.com/v17.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
             payload = {
                 "recipient": {"id": sender_id},
@@ -236,7 +226,7 @@ def process_webhook_event(messaging_event):
                             "buttons": [
                                 {
                                     "type": "web_url",
-                                    "url": "https://veltro.sellbd.shop",  # 🚀 এখানে আপনার আসল ওয়েবসাইটের লিঙ্ক দিন
+                                    "url": WEBSITE_URL,  # 🚀 .env এর লিংক এখানে বসে যাবে
                                     "title": "Visit Website"
                                 }
                             ]
@@ -248,28 +238,27 @@ def process_webhook_event(messaging_event):
             requests.post(url, json=payload, headers=headers)
             return
 
-        # 🎯 ৩. যদি ইউজার জেনারেল কোনো কিওয়ার্ড লেখে (প্রোডাক্ট/দাম)
+        # 🎯 ২. ইউজার যদি প্রোডাক্ট দেখতে চায়
         if any(word in user_text for word in ["product", "onno", "details", "price", "all", "পণ্য", "দাম", "সব"]):
             if all_products:
                 send_product_carousel(sender_id, all_products[:10])
             else:
                 send_fb_message(sender_id, "স্টক খালি বা ডাটাবেজ অফলাইন।")
                 
-        # 🎯 ৪. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
+        # 🎯 ৩. কোনো ম্যাচ না থাকলে এআই কাস্টমারের সাথে নরমাল চ্যাট করবে
         else:
             try:
-                # প্রম্পটে এআই-কে লিঙ্ক চাওয়ার বিষয়টি জানিয়ে দেওয়া হয়েছে, যাতে সে টেক্সটেও গাইড করতে পারে
                 system_instruction = (
                     "You are a polite and helpful E-commerce Assistant for an online shop. "
                     "Always reply shortly and friendly in Bengali language (Bangla script). "
                     "CRITICAL: If the customer asks how to buy or order, instruct them politely to visit our website, select their desired product, and complete the order from there. "
-                    "If they ask for the website link, tell them to click the link button provided or visit 'https://yourwebsite.com'. "  # 🚀 আপনার লিঙ্ক বসান
+                    f"If they ask for the website link, tell them to click the link button provided or visit '{WEBSITE_URL}'. "  # 🚀 এআই প্রম্পটেও অটোমেটিক লিংক বসে যাবে
                     "If they are looking for specific jewelry, tell them to type the exact product name or type 'product' to see all collections. "
                     "Keep your responses within 1-2 sentences."
                 )
                 
                 response = ai_client.chat.completions.create(
-                    model="meta-llama/llama-4-scout-17b-16e-instruct", # আপনার নতুন ভিশন/টেক্সট মডেল
+                    model="meta-llama/llama-4-scout-17b-16e-instruct", 
                     messages=[
                         {"role": "system", "content": system_instruction},
                         {"role": "user", "content": user_text}
@@ -281,6 +270,7 @@ def process_webhook_event(messaging_event):
             except Exception as e:
                 print(f"Groq Text Error: {e}")
                 send_fb_message(sender_id, "আপনাকে কীভাবে সাহায্য করতে পারি? প্রোডাক্ট দেখতে 'product' লিখুন।")
+
 
 # ---- 🌐 WEBHOOK ROUTING ----
 
