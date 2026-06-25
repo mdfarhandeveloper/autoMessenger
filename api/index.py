@@ -152,7 +152,7 @@ async def handle_messages(request: Request):
                             
                             # OpenAI Vision API কল (সরাসরি ইমেজ URL পাস করা হচ্ছে)
                             response = ai_client.chat.completions.create(
-                                model="gpt-4o-mini",
+                                model="gpt-4o",
                                 messages=[
                                     {
                                         "role": "user",
@@ -197,7 +197,7 @@ async def handle_messages(request: Request):
                         ai_chat_prompt = f"You are an e-commerce assistant. Reply in Bengali to this message shortly: '{user_text}'"
                         
                         response = ai_client.chat.completions.create(
-                            model="gpt-4o-mini",
+                            model="gpt-4o",
                             messages=[
                                 {"role": "user", "content": ai_chat_prompt}
                             ]
