@@ -39,11 +39,10 @@ else:
 openai_key = os.environ.get("OPENAI_API_KEY")
 ai_client = None
 if openai_key:
-    # আগের ai_client = OpenAI(api_key=openai_key) এর জায়গায় এটি দিন:
-ai_client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"), # এখানে Groq থেকে পাওয়া ফ্রি কী-টি থাকবে
-    base_url="https://api.groq.com/openai/v1"  # <--- এই লাইনটি যোগ করুন
-)
+    ai_client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        base_url="https://api.groq.com/openai/v1"
+    )
 else:
     print("CRITICAL: OPENAI_API_KEY env variable is missing!")
 
@@ -179,7 +178,7 @@ async def handle_messages(request: Request):
                                 if product_doc:
                                     send_product_carousel(sender_id, [product_doc])
                                 else:
-                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
+                                    send_fb_message(sender_id, "Product ID মিললেও ডাটাবেজে ডিটেইলস পাওয়া যায়নি।")
                             else:
                                 send_fb_message(sender_id, "Dukkhito! Ei product ti amader database-e khuje paini।")
                                 
