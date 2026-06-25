@@ -73,7 +73,9 @@ def send_product_carousel(recipient_id, products):
         subtitle_text = f"Price: {price}\n{desc}"[:80]
         
         # ডাইনামিক প্রোডাক্ট লিংক জেনারেশন
-       
+       product_link = p.get('product_url')
+        if not product_link:
+            product_link = f"{WEBSITE_URL}"
         
         elements.append({
             "title": p.get('name', 'Jewelry Item'),
