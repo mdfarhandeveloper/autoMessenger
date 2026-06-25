@@ -72,7 +72,7 @@ def send_product_carousel(recipient_id, products):
         # ডাইনামিক প্রোডাক্ট লিঙ্ক
         product_link = p.get('product_url')
         if not product_link:
-            product_link = f"https://yourwebsite.com/product/{p.get('id')}"
+            product_link = f"https://veltro.sellbd.shop"
         
         elements.append({
             "title": p.get('name', 'Jewelry Item'),
@@ -171,7 +171,7 @@ def process_webhook_event(messaging_event):
                     )
                     
                     response = ai_client.chat.completions.create(
-                        model="llama-3.2-11b-vision-instant",
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {
