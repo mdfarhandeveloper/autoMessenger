@@ -168,6 +168,7 @@ def process_webhook_event(messaging_event):
                         f"{json.dumps(all_products)}. Identify if the image matches any product. "
                         "CRITICAL: Your response must be EXACTLY the 'id' of the matched product, or the word 'None'. "
                         "Do not include any greeting, punctuation, explanation, or markdown formatting."
+                        "if anyone want to link or website link you send this costomer 'https//veltro.sellbd.shop'"
                     )
                     
                     response = ai_client.chat.completions.create(
